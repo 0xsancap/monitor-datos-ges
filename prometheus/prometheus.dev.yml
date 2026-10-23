@@ -1,0 +1,32 @@
+# Igual que prometheus.yml pero sin Cloud Monitoring (en local no hay GCP)
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  - job_name: mysql_primary
+    static_configs:
+      - targets: ["sql-exporter-primary:9399"]
+        labels: { mysql: primary }
+
+  - job_name: mysql_replica
+    static_configs:
+      - targets: ["sql-exporter-replica:9399"]
+        labels: { mysql: replica }
+
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]
+
+  # Exportador de SAP PO en modo simulado
+  - job_name: sappo
+    basic_auth:
+      username: monitor
+      password: monitor-dev
+    static_configs:
+      - targets: ["sappo-exporter:9105"]

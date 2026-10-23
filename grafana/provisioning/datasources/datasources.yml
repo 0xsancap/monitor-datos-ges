@@ -1,0 +1,40 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  # Conexiones directas para los paneles de detalle (consultas en vivo).
+  # Mismo usuario de solo lectura que usa sql_exporter.
+  - name: MySQL principal
+    uid: mysql-primary
+    type: mysql
+    url: ${MYSQL_PRIMARY_HOST}
+    user: ${MYSQL_MONITOR_USER}
+    jsonData:
+      database: ${MYSQL_DB}
+      maxOpenConns: 3
+      maxIdleConns: 1
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${MYSQL_MONITOR_PASSWORD}
+    editable: false
+
+  - name: MySQL réplica
+    uid: mysql-replica
+    type: mysql
+    url: ${MYSQL_REPLICA_HOST}
+    user: ${MYSQL_MONITOR_USER}
+    jsonData:
+      database: ${MYSQL_DB}
+      maxOpenConns: 3
+      maxIdleConns: 1
+      connMaxLifetime: 14400
+    secureJsonData:
+      password: ${MYSQL_MONITOR_PASSWORD}
+    editable: false

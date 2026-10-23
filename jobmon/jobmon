@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# jobmon: envuelve un proceso batch y envía su resultado al monitor (Pushgateway).
+#
+# Uso:
+#   jobmon <nombre> <comando> [args...]
+#
+# Variables opcionales:
+#   JOBMON_PUSHGATEWAY    URL del Pushgateway (por defecto http://monitor.interno:9091,
+#                         o lo que haya en /etc/default/jobmon)
+#   JOBMON_MAX_INTERVAL   segundos máximos entre dos ejecuciones correctas (por defecto 26 h)
+#   JOBMON_MAX_DURATION   segundos máximos que puede durar una ejecución (por defecto 3 h)
+#
+# Ejemplo de crontab:
+#   0 2 * * * JOBMON_MAX_DURATION=7200 /usr/local/bin/jobmon cierre_diario /opt/batch/cierre.sh >> /var/log/batch/cierre.log 2>&1
+#
+# Si el monitor no responde, el job se ejecuta igual: jobmon nunca hace fallar al batch.
+# Devuelve el mismo código de salida que el comando.
+
+set -u
+
+if [ $# -lt 2 ]; then
+  echo "uso: jobmon <nombre> <comando> [args...]" >&2
+  exit 64
+fi
+
+[ -r /etc/default/jobmon ] && . /etc/default/jobmon
+
+NAME="$1"; shift
+case "$NAME" in
+  *[!A-Za-z0-9_-]*) echo "jobmon: el nombre solo puede tener letras, números, '_' y '-'" >&2; exit 64 ;;
+esac
+
+PGW="${JOBMON_PUSHGATEWAY:-http://monitor.interno:9091}"
+URL="$PGW/metrics/job/$NAME/instance/$(hostname -s)"
+
+# POST: sustituye solo las métricas enviadas y conserva las demás
+# (así el último éxito no se pierde cuando una ejecución falla).
+push() {
+  curl -fsS --max-time 10 --retry 2 --data-binary @- "$URL" >/dev/null 2>&1 \
+    || echo "jobmon: aviso, no se pudo enviar el estado a $PGW" >&2
+}
+
+START=$(date +%s)
+push <<EOF
+batch_running 1
+batch_last_start_timestamp_seconds $START
+batch_max_interval_seconds ${JOBMON_MAX_INTERVAL:-93600}
+batch_max_duration_seconds ${JOBMON_MAX_DURATION:-10800}
+EOF
+
+"$@"
+RC=$?
+END=$(date +%s)
+
+{
+  echo "batch_running 0"
+  echo "batch_last_end_timestamp_seconds $END"
+  echo "batch_last_exit_code $RC"
+  echo "batch_last_duration_seconds $((END - START))"
+  [ "$RC" -eq 0 ] && echo "batch_last_success_timestamp_seconds $END"
+} | push
+
+exit "$RC"

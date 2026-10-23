@@ -1,0 +1,36 @@
+# Consultas en ejecución en MySQL.
+# Usa information_schema.PROCESSLIST porque performance_schema no siempre está
+# activo en Cloud SQL. El usuario de monitor necesita el privilegio PROCESS
+# para ver las consultas de los demás usuarios.
+
+collector_name: processlist
+
+metrics:
+  - metric_name: mysql_queries_activas_total
+    type: gauge
+    help: "Consultas en ejecución (sin contar conexiones inactivas ni replicación)"
+    values: [activas]
+    query_ref: processlist
+
+  - metric_name: mysql_queries_largas_total
+    type: gauge
+    help: "Consultas que llevan 60 segundos o más en ejecución"
+    values: [largas]
+    query_ref: processlist
+
+  - metric_name: mysql_query_mas_larga_segundos
+    type: gauge
+    help: "Segundos que lleva la consulta más larga en ejecución"
+    values: [max_segundos]
+    query_ref: processlist
+
+queries:
+  - query_name: processlist
+    query: |
+      SELECT COUNT(*)                     AS activas,
+             COALESCE(SUM(TIME >= 60), 0) AS largas,
+             COALESCE(MAX(TIME), 0)       AS max_segundos
+        FROM information_schema.PROCESSLIST
+       WHERE COMMAND NOT IN ('Sleep', 'Binlog Dump', 'Binlog Dump GTID', 'Daemon', 'Connect')
+         AND USER NOT IN ('system user', 'event_scheduler', 'cloudsqlreplica')
+         AND ID <> CONNECTION_ID()

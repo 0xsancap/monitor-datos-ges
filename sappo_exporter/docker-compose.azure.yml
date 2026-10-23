@@ -1,0 +1,22 @@
+# Despliegue del exportador en una VM de Azure, en la misma red que SAP PO.
+#   cp .env.example .env            # y rellénalo
+#   ./generar-certificado.sh <ip-publica-o-dns>
+#   docker compose -f docker-compose.azure.yml up -d --build
+
+services:
+  sappo-exporter:
+    build: .
+    image: monitor-datos/sappo-exporter
+    pull_policy: build
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      METRICS_TLS_CERT: /certs/sappo-exporter.crt
+      METRICS_TLS_KEY: /certs/sappo-exporter.key
+    volumes:
+      - ./certs:/certs:ro
+    ports:
+      - "9105:9105"
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

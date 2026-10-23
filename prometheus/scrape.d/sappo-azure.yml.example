@@ -1,0 +1,18 @@
+# SAP PO con el exportador desplegado en Azure (HTTPS + usuario y contraseña).
+# Para activarlo:
+#   cp prometheus/scrape.d/sappo-azure.yml.example prometheus/scrape.d/sappo.yml
+#   (cambia la IP de abajo)
+#   echo -n 'METRICS_PASSWORD del exportador' > prometheus/secrets/sappo_password
+#   cp <certs/sappo-exporter.crt de la VM de Azure> prometheus/secrets/sappo_ca.crt
+#   docker compose restart prometheus
+scrape_configs:
+  - job_name: sappo
+    scheme: https
+    scrape_timeout: 20s
+    basic_auth:
+      username: monitor
+      password_file: /etc/prometheus/secrets/sappo_password
+    tls_config:
+      ca_file: /etc/prometheus/secrets/sappo_ca.crt
+    static_configs:
+      - targets: ["IP-PUBLICA-VM-AZURE:9105"]

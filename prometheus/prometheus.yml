@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 60s
+  scrape_timeout: 30s
+  evaluation_interval: 60s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+# Jobs opcionales (SAP PO): se activan copiando un .example de scrape.d/ a .yml
+scrape_config_files:
+  - /etc/prometheus/scrape.d/*.yml
+
+scrape_configs:
+  - job_name: mysql_primary
+    static_configs:
+      - targets: ["sql-exporter-primary:9399"]
+        labels: { mysql: primary }
+
+  - job_name: mysql_replica
+    static_configs:
+      - targets: ["sql-exporter-replica:9399"]
+        labels: { mysql: replica }
+
+  - job_name: cloudsql
+    static_configs:
+      - targets: ["stackdriver-exporter:9255"]
+
+  # honor_labels: conserva job/instance que envía cada batch
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["pushgateway:9091"]

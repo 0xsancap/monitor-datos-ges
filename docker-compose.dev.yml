@@ -1,0 +1,40 @@
+# Entorno local de pruebas: se suma a docker-compose.yml con `make dev`.
+# Añade un MySQL con tablas de ejemplo y Mailpit para ver los emails
+# de alerta en http://localhost:8025 sin enviar nada de verdad.
+
+services:
+  mysql-dev:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: negocio
+    volumes:
+      - ./dev/mysql-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:3307:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-uroot", "-proot", "--silent"]
+      interval: 5s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.27
+    ports:
+      - "127.0.0.1:8025:8025"
+
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus.dev.yml
+      - --storage.tsdb.path=/prometheus
+
+  sql-exporter-primary:
+    depends_on:
+      mysql-dev: { condition: service_healthy }
+
+  sql-exporter-replica:
+    depends_on:
+      mysql-dev: { condition: service_healthy }
+
+  grafana:
+    depends_on:
+      mysql-dev: { condition: service_healthy }

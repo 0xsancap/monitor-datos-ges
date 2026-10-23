@@ -1,0 +1,401 @@
+# Reglas de alerta. Todas siguen el mismo esquema:
+#   A = consulta PromQL (un valor por tabla / instancia / batch)
+#   C = umbral sobre A
+# Para cambiar un umbral, edita "params" del bloque C y reinicia Grafana.
+#
+# noDataState: Alerting en los checks que SIEMPRE deben devolver datos
+# (si dejan de llegar, algo está roto aunque no haya error visible).
+
+apiVersion: 1
+
+groups:
+  # ───────────────────────────── COLAS ─────────────────────────────
+  - orgId: 1
+    name: colas
+    folder: Monitor de datos
+    interval: 1m
+    rules:
+      - uid: cola-atascada
+        title: Cola atascada
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severidad: critica, area: colas }
+        annotations:
+          summary: "Cola {{ .Labels.tabla }}: el pendiente más antiguo tiene {{ with .Values.A }}{{ humanizeDuration .Value }}{{ end }}"
+          description: "Hay registros con procesado = 'P' en {{ .Labels.tabla }} que llevan más de 30 minutos sin procesarse. Revisa el proceso que consume esta cola."
+          __dashboardUid__: estado-general
+          __panelId__: "4"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: cola_pendiente_mas_antiguo_segundos
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1800] }
+
+      - uid: cola-acumulada
+        title: Cola con muchos pendientes
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: aviso, area: colas }
+        annotations:
+          summary: "Cola {{ .Labels.tabla }}: {{ with .Values.A }}{{ .Value }}{{ end }} registros pendientes"
+          description: "La cola {{ .Labels.tabla }} supera los 1000 pendientes durante más de 10 minutos."
+          __dashboardUid__: estado-general
+          __panelId__: "3"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: cola_pendientes_total
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [1000] }
+
+  # ───────────────────────────── MYSQL ─────────────────────────────
+  - orgId: 1
+    name: mysql
+    folder: Monitor de datos
+    interval: 1m
+    rules:
+      - uid: mysql-query-larga
+        title: Consulta MySQL de larga duración
+        condition: C
+        for: 2m
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severidad: aviso, area: mysql }
+        annotations:
+          summary: "MySQL {{ .Labels.mysql }}: hay una consulta en ejecución desde hace {{ with .Values.A }}{{ humanizeDuration .Value }}{{ end }}"
+          description: "Abre el panel de detalle para ver la consulta, el usuario y el host."
+          __dashboardUid__: detalle
+          __panelId__: "8"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: mysql_query_mas_larga_segundos
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [300] }
+
+      - uid: mysql-replica-lag
+        title: Replication lag alto
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severidad: critica, area: mysql }
+        annotations:
+          summary: "Cloud SQL{{ with .Labels.database_id }} {{ . }}{{ end }}: replication lag {{ if lt .Values.A.Value 0.0 }}sin datos{{ else }}de {{ humanizeDuration .Values.A.Value }}{{ end }}"
+          description: "Si llega como 'sin datos', la réplica puede estar parada o el exportador de Cloud Monitoring no funciona."
+          __dashboardUid__: estado-general
+          __panelId__: "8"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              # -1 si la métrica no existe: así 'sin datos' es un valor normal y no un NoData
+              expr: cloudsql_replica_lag_seconds or on() vector(-1)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                # Alerta si el lag es > 60 s o si no hay datos (-1)
+                - evaluator: { type: outside_range, params: [-0.5, 60] }
+
+  # ───────────────────────────── BATCH ─────────────────────────────
+  - orgId: 1
+    name: batch
+    folder: Monitor de datos
+    interval: 1m
+    rules:
+      - uid: batch-error
+        title: Batch terminado con error
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: critica, area: batch }
+        annotations:
+          summary: "Batch {{ .Labels.job }} en {{ .Labels.instance }} terminó con código {{ with .Values.A }}{{ .Value }}{{ end }}"
+          description: "Revisa el log del job en el servidor {{ .Labels.instance }}. La alerta se cierra sola cuando el job vuelva a terminar bien."
+          __dashboardUid__: estado-general
+          __panelId__: "10"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: batch_last_exit_code
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      # Tiempo de retraso = ahora − último éxito − intervalo máximo del job.
+      # Si el job nunca ha terminado bien, cuenta desde su primer arranque.
+      - uid: batch-no-ejecutado
+        title: Batch sin ejecutarse
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: critica, area: batch }
+        annotations:
+          summary: "Batch {{ .Labels.job }} en {{ .Labels.instance }} no termina bien desde hace demasiado ({{ with .Values.A }}{{ humanizeDuration .Value }}{{ end }} de retraso)"
+          description: "Comprueba que el cron sigue configurado y que el servidor {{ .Labels.instance }} está encendido."
+          __dashboardUid__: estado-general
+          __panelId__: "10"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: >-
+                time()
+                - (batch_last_success_timestamp_seconds or batch_last_start_timestamp_seconds)
+                - batch_max_interval_seconds
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: batch-colgado
+        title: Batch colgado
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: critica, area: batch }
+        annotations:
+          summary: "Batch {{ .Labels.job }} en {{ .Labels.instance }} sigue en ejecución {{ with .Values.A }}{{ humanizeDuration .Value }}{{ end }} más de lo permitido"
+          description: "El job ha superado su duración máxima. Comprueba si está bloqueado (por ejemplo, esperando un lock de MySQL)."
+          __dashboardUid__: estado-general
+          __panelId__: "10"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              # × 0 cuando no está en ejecución: la serie no desaparece al terminar el job
+              # y la alerta se resuelve con su texto normal
+              expr: >-
+                (time() - batch_last_start_timestamp_seconds - batch_max_duration_seconds)
+                * (batch_running == bool 1)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+  # ─────────────────────────── MONITOR ─────────────────────────────
+  - orgId: 1
+    name: monitor
+    folder: Monitor de datos
+    interval: 1m
+    rules:
+      - uid: monitor-check-caido
+        title: Check del monitor sin respuesta
+        condition: C
+        for: 5m
+        noDataState: Alerting
+        execErrState: Error
+        labels: { severidad: critica, area: monitor }
+        annotations:
+          summary: "El check {{ .Labels.job }} no responde"
+          description: "Mientras siga caído, sus alertas no pueden saltar. Revisa el contenedor y la conexión con la fuente de datos."
+          __dashboardUid__: estado-general
+          __panelId__: "1"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: up
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+  # ──────────────────────────── SAP PO ─────────────────────────────
+  # noDataState OK: si el exportador no está configurado no hay datos y no es un error.
+  # Si está configurado y cae, avisa "Check del monitor sin respuesta" (job sappo).
+  - orgId: 1
+    name: sap-po
+    folder: Monitor de datos
+    interval: 1m
+    rules:
+      - uid: sappo-errores-nuevos
+        title: SAP PO con errores nuevos
+        condition: C
+        for: 0s
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: critica, area: sap-po }
+        annotations:
+          summary: "SAP PO: {{ with .Values.A }}{{ .Value }}{{ end }} mensajes nuevos en error en los últimos 15 minutos"
+          description: "Revisa el Message Monitor de PO (estado System Error). El panel de detalle muestra qué interfaces fallan."
+          __dashboardUid__: estado-general
+          __panelId__: "12"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(sappo_errores_nuevos)
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+
+      - uid: sappo-scheduled-antiguo
+        title: SAP PO con mensajes scheduled atascados
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: critica, area: sap-po }
+        annotations:
+          summary: "SAP PO: hay un mensaje en Scheduled desde hace {{ with .Values.A }}{{ humanizeDuration .Value }}{{ end }}"
+          description: "Un mensaje lleva más de 1 hora sin entregarse. Suele indicar un canal parado o un receptor que no responde."
+          __dashboardUid__: estado-general
+          __panelId__: "15"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: max(sappo_mensaje_mas_antiguo_segundos{estado="toBeDelivered"})
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [3600] }
+
+      - uid: sappo-scheduled-acumulados
+        title: SAP PO con muchos mensajes scheduled
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: aviso, area: sap-po }
+        annotations:
+          summary: "SAP PO: {{ with .Values.A }}{{ .Value }}{{ end }} mensajes en Scheduled"
+          description: "Se están acumulando mensajes pendientes de entrega."
+          __dashboardUid__: estado-general
+          __panelId__: "14"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sum(sappo_mensajes{estado="toBeDelivered"})
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [500] }
+
+      - uid: sappo-consulta-fallida
+        title: SAP PO no responde al monitor
+        condition: C
+        for: 5m
+        noDataState: OK
+        execErrState: Error
+        labels: { severidad: critica, area: sap-po }
+        annotations:
+          summary: "El exportador no consigue consultar SAP PO"
+          description: "El exportador funciona pero la llamada SOAP a PO falla: credenciales, PO caído o red. Mira los logs del contenedor sappo-exporter."
+          __dashboardUid__: estado-general
+          __panelId__: "12"
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: sappo_consulta_ok
+              instant: true
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: lt, params: [1] }

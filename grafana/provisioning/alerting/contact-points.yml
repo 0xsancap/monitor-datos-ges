@@ -1,0 +1,35 @@
+apiVersion: 1
+
+# Asunto del email: "[ALERTA] <resumen de la primera alerta activa>" o "[RESUELTO] <alerta> · <tabla/job>"
+templates:
+  - orgId: 1
+    name: monitor
+    template: |
+      {{ define "monitor.asunto" -}}
+      {{ if .Alerts.Firing -}}
+      [ALERTA] {{ with index .Alerts.Firing 0 }}{{ .Annotations.summary }}{{ end }}{{ if gt (len .Alerts.Firing) 1 }} ({{ len .Alerts.Firing }} activas){{ end }}
+      {{- else -}}
+      [RESUELTO] {{ with index .Alerts.Resolved 0 }}{{ .Labels.alertname }}{{ with .Labels.tabla }} · {{ . }}{{ end }}{{ with .Labels.job }} · {{ . }}{{ end }}{{ end }}
+      {{- end }}
+      {{- end }}
+
+contactPoints:
+  - orgId: 1
+    name: email
+    receivers:
+      - uid: email
+        type: email
+        settings:
+          # Varias direcciones separadas por ";"
+          addresses: ${ALERT_EMAILS}
+          singleEmail: true
+          subject: '{{ template "monitor.asunto" . }}'
+
+policies:
+  - orgId: 1
+    receiver: email
+    group_by: [alertname, grafana_folder]
+    group_wait: 30s
+    group_interval: 5m
+    # Si una alerta sigue activa, recuerda cada 4 horas
+    repeat_interval: 4h

@@ -1,0 +1,6 @@
+groups:
+  - name: cloudsql
+    rules:
+      # Nombre corto para el lag que publica Cloud Monitoring (segundos)
+      - record: cloudsql_replica_lag_seconds
+        expr: stackdriver_cloudsql_database_cloudsql_googleapis_com_database_replication_replica_lag

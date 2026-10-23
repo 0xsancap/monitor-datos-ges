@@ -1,0 +1,39 @@
+# Colas de negocio: registros con procesado = 'P'.
+#
+# Para añadir una tabla, copia un bloque del UNION ALL y cambia el nombre de
+# la tabla y de la columna de fecha. Requisito: índice en (procesado, fecha),
+# si no cada consulta recorre la tabla entera.
+#
+#   CREATE INDEX idx_procesado_fecha ON pedidos (procesado, fecha);
+
+collector_name: colas
+
+metrics:
+  - metric_name: cola_pendientes_total
+    type: gauge
+    help: "Registros pendientes (procesado = 'P') por tabla"
+    key_labels: [tabla]
+    values: [pendientes]
+    query_ref: colas
+
+  - metric_name: cola_pendiente_mas_antiguo_segundos
+    type: gauge
+    help: "Antigüedad en segundos del registro pendiente más antiguo (0 si no hay)"
+    key_labels: [tabla]
+    values: [edad_segundos]
+    query_ref: colas
+
+queries:
+  - query_name: colas
+    query: |
+      SELECT 'pedidos' AS tabla,
+             COUNT(*) AS pendientes,
+             COALESCE(TIMESTAMPDIFF(SECOND, MIN(fecha), NOW()), 0) AS edad_segundos
+        FROM pedidos
+       WHERE procesado = 'P'
+      UNION ALL
+      SELECT 'facturas',
+             COUNT(*),
+             COALESCE(TIMESTAMPDIFF(SECOND, MIN(fecha), NOW()), 0)
+        FROM facturas
+       WHERE procesado = 'P'

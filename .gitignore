@@ -1,0 +1,5 @@
+.env
+prometheus/secrets/
+prometheus/scrape.d/*.yml
+sappo_exporter/.env
+sappo_exporter/certs/

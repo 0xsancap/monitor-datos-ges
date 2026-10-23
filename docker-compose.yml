@@ -1,0 +1,115 @@
+# Monitor de datos de negocio
+# Producción:  docker compose up -d            (lee .env)
+# Desarrollo:  make dev                         (MySQL de pruebas + Mailpit)
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=90d
+    volumes:
+      - ./prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+
+  grafana:
+    image: grafana/grafana:12.1.1
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_DATE_FORMATS_DEFAULT_TIMEZONE: Europe/Madrid
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: ${SMTP_HOST}
+      GF_SMTP_USER: ${SMTP_USER}
+      GF_SMTP_PASSWORD: ${SMTP_PASSWORD}
+      GF_SMTP_FROM_ADDRESS: ${SMTP_FROM}
+      GF_SMTP_FROM_NAME: Monitor de datos
+      # Variables usadas dentro de grafana/provisioning/*
+      GRAFANA_ROOT_URL: ${GRAFANA_ROOT_URL}
+      ALERT_EMAILS: ${ALERT_EMAILS}
+      MYSQL_PRIMARY_HOST: ${MYSQL_PRIMARY_HOST}
+      MYSQL_REPLICA_HOST: ${MYSQL_REPLICA_HOST}
+      MYSQL_DB: ${MYSQL_DB}
+      MYSQL_MONITOR_USER: ${MYSQL_MONITOR_USER}
+      MYSQL_MONITOR_PASSWORD: ${MYSQL_MONITOR_PASSWORD}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus]
+
+  # Checks SQL contra el MySQL principal: colas pendientes + processlist
+  sql-exporter-primary:
+    image: burningalchemist/sql_exporter:0.24.9
+    restart: unless-stopped
+    command: ["-config.file=/config/primary.yml"]
+    environment:
+      SQLEXPORTER_TARGET_DSN: mysql://${MYSQL_MONITOR_USER}:${MYSQL_MONITOR_PASSWORD}@${MYSQL_PRIMARY_HOST}/${MYSQL_DB}
+    volumes:
+      - ./sql_exporter:/config:ro
+
+  # Checks SQL contra la réplica: processlist
+  sql-exporter-replica:
+    image: burningalchemist/sql_exporter:0.24.9
+    restart: unless-stopped
+    command: ["-config.file=/config/replica.yml"]
+    environment:
+      SQLEXPORTER_TARGET_DSN: mysql://${MYSQL_MONITOR_USER}:${MYSQL_MONITOR_PASSWORD}@${MYSQL_REPLICA_HOST}/${MYSQL_DB}
+    volumes:
+      - ./sql_exporter:/config:ro
+
+  # Replication lag de Cloud SQL leído de Cloud Monitoring.
+  # Credenciales: la service account de la VM (roles/monitoring.viewer).
+  stackdriver-exporter:
+    image: prometheuscommunity/stackdriver-exporter:v0.18.0
+    restart: unless-stopped
+    profiles: [gcp]
+    command:
+      - --google.project-ids=${GCP_PROJECT_ID}
+      - --monitoring.metrics-prefixes=cloudsql.googleapis.com/database/replication/replica_lag
+      - --monitoring.metrics-interval=5m
+      - --monitoring.metrics-offset=0s
+
+  # SAP PO, solo si esta VM llega a PO por VPN (perfil "sappo").
+  # Si no hay VPN, el exportador se despliega en Azure: ver sappo_exporter/README.md
+  sappo-exporter:
+    build: ./sappo_exporter
+    image: monitor-datos/sappo-exporter
+    pull_policy: build
+    restart: unless-stopped
+    profiles: [sappo]
+    environment:
+      SAPPO_MODO: ${SAPPO_MODO:-soap}
+      SAPPO_URL: ${SAPPO_URL:-}
+      SAPPO_USUARIO: ${SAPPO_USUARIO:-}
+      SAPPO_PASSWORD: ${SAPPO_PASSWORD:-}
+      SAPPO_VERIFICAR_TLS: ${SAPPO_VERIFICAR_TLS:-true}
+      METRICS_PASSWORD: ${SAPPO_METRICS_PASSWORD:-}
+
+  # Recibe el resultado de los procesos batch (script jobmon).
+  # El fichero de persistencia evita perder el estado de los batch al reiniciar.
+  pushgateway:
+    image: prom/pushgateway:v1.11.1
+    restart: unless-stopped
+    command:
+      - --persistence.file=/data/pushgateway.db
+      - --persistence.interval=1m
+    volumes:
+      - pushgateway-data:/data
+    ports:
+      - "9091:9091"
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  pushgateway-data:
